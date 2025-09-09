@@ -130,3 +130,52 @@
     (ok true)
   )
 )
+
+;; Calculate pending rewards for a staker
+(define-read-only (get-pending-rewards (staker principal))
+  (match (map-get? staking-positions { staker: staker })
+    position
+    (let (
+        (staked-amount (get amount position))
+        (blocks-staked (- stacks-block-height (get locked-at position)))
+        (annual-rate (var-get annual-yield-rate))
+        (blocks-per-year u52560) ;; Approximate blocks per year on Stacks
+      )
+      ;; Calculate time-weighted rewards
+      (/ (* (* staked-amount annual-rate) blocks-staked) (* u10000 blocks-per-year))
+    )
+    u0
+  )
+)
+
+;; Claim accumulated rewards
+(define-public (claim-rewards)
+  (let (
+      (position (unwrap! (map-get? staking-positions { staker: tx-sender }) ERR_NO_POSITION))
+      (rewards (get-pending-rewards tx-sender))
+    )
+    (asserts! (> rewards u0) ERR_NO_POSITION)
+    (asserts! (<= rewards (var-get treasury-balance)) ERR_INSUFFICIENT_REWARDS)
+    
+    ;; Update treasury and reward history
+    (var-set treasury-balance (- (var-get treasury-balance) rewards))
+    (match (map-get? reward-history { staker: tx-sender })
+      history (map-set reward-history { staker: tx-sender } { 
+        total-claimed: (+ rewards (get total-claimed history)) 
+      })
+      (map-set reward-history { staker: tx-sender } { total-claimed: rewards })
+    )
+    
+    ;; Reset reward calculation timestamp
+    (map-set staking-positions { staker: tx-sender } {
+      amount: (get amount position),
+      locked-at: stacks-block-height,
+    })
+    
+    ;; Transfer rewards to user
+    (as-contract (try! (contract-call? 'ST1F7QA2MDF17S807EPA36TSS8AMEFY4KA9TVGWXT.sbtc-token
+      transfer rewards (as-contract tx-sender) tx-sender none)))
+    
+    (ok rewards)
+  )
+)
