@@ -77,3 +77,56 @@
     (ok true)
   )
 )
+
+;; Adjust minimum lock period
+(define-public (set-lock-period (blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender (var-get protocol-owner)) ERR_UNAUTHORIZED)
+    (asserts! (> blocks u0) ERR_INVALID_PERIOD)
+    (var-set minimum-lock-period blocks)
+    (ok true)
+  )
+)
+
+;; Fund the treasury for reward distribution
+(define-public (fund-treasury (amount uint))
+  (begin
+    (asserts! (> amount u0) ERR_ZERO_AMOUNT)
+    (try! (contract-call? 'ST1F7QA2MDF17S807EPA36TSS8AMEFY4KA9TVGWXT.sbtc-token
+      transfer amount tx-sender (as-contract tx-sender) none))
+    (var-set treasury-balance (+ (var-get treasury-balance) amount))
+    (ok true)
+  )
+)
+
+;; CORE STAKING FUNCTIONS
+
+;; Stake sBTC tokens
+(define-public (stake-btc (amount uint))
+  (begin
+    (asserts! (> amount u0) ERR_ZERO_AMOUNT)
+    
+    ;; Transfer sBTC to protocol
+    (try! (contract-call? 'ST1F7QA2MDF17S807EPA36TSS8AMEFY4KA9TVGWXT.sbtc-token
+      transfer amount tx-sender (as-contract tx-sender) none))
+    
+    ;; Update or create staking position
+    (match (map-get? staking-positions { staker: tx-sender })
+      existing-position
+      ;; Add to existing position
+      (map-set staking-positions { staker: tx-sender } {
+        amount: (+ amount (get amount existing-position)),
+        locked-at: stacks-block-height,
+      })
+      ;; Create new position
+      (map-set staking-positions { staker: tx-sender } {
+        amount: amount,
+        locked-at: stacks-block-height,
+      })
+    )
+    
+    ;; Update protocol TVL
+    (var-set total-value-locked (+ (var-get total-value-locked) amount))
+    (ok true)
+  )
+)
