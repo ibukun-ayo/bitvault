@@ -179,3 +179,71 @@
     (ok rewards)
   )
 )
+
+;; Unstake tokens (claims rewards automatically)
+(define-public (unstake-btc (amount uint))
+  (let (
+      (position (unwrap! (map-get? staking-positions { staker: tx-sender }) ERR_NO_POSITION))
+      (staked-amount (get amount position))
+      (locked-duration (- stacks-block-height (get locked-at position)))
+    )
+    (asserts! (> amount u0) ERR_ZERO_AMOUNT)
+    (asserts! (>= staked-amount amount) ERR_NO_POSITION)
+    (asserts! (>= locked-duration (var-get minimum-lock-period)) ERR_LOCKED_PERIOD)
+    
+    ;; Auto-claim rewards first
+    (try! (claim-rewards))
+    
+    ;; Update or remove position
+    (if (> staked-amount amount)
+      (map-set staking-positions { staker: tx-sender } {
+        amount: (- staked-amount amount),
+        locked-at: stacks-block-height,
+      })
+      (map-delete staking-positions { staker: tx-sender })
+    )
+    
+    ;; Update TVL and transfer tokens
+    (var-set total-value-locked (- (var-get total-value-locked) amount))
+    (as-contract (try! (contract-call? 'ST1F7QA2MDF17S807EPA36TSS8AMEFY4KA9TVGWXT.sbtc-token
+      transfer amount (as-contract tx-sender) tx-sender none)))
+    
+    (ok amount)
+  )
+)
+
+;; READ-ONLY FUNCTIONS
+
+;; Get staker's position details
+(define-read-only (get-position (staker principal))
+  (map-get? staking-positions { staker: staker })
+)
+
+;; Get staker's reward history
+(define-read-only (get-reward-history (staker principal))
+  (map-get? reward-history { staker: staker })
+)
+
+;; Get current protocol configuration
+(define-read-only (get-protocol-config)
+  {
+    annual-yield-rate: (var-get annual-yield-rate),
+    minimum-lock-period: (var-get minimum-lock-period),
+    treasury-balance: (var-get treasury-balance),
+    total-value-locked: (var-get total-value-locked),
+  }
+)
+
+;; Get formatted APY for display (as percentage)
+(define-read-only (get-current-apy)
+  (/ (var-get annual-yield-rate) u100)
+)
+
+;; Check if position can be unstaked
+(define-read-only (can-unstake (staker principal))
+  (match (map-get? staking-positions { staker: staker })
+    position
+    (>= (- stacks-block-height (get locked-at position)) (var-get minimum-lock-period))
+    false
+  )
+)
